@@ -1,0 +1,158 @@
+#!/bin/bash
+
+# vars
+SELF="${BASH_SOURCE[0]}"
+SELF_DIR=$(cd $(dirname "${BASH_SOURCE[0]}") && pwd -P)
+SELF_DIR="${SELF_DIR:-$(pwd)}"
+PUBLIC_DIR="${SELF_DIR}/public"
+DOCS_OFFICIAL="https://github.com/HandBrake/HandBrake-docs.git"
+GIT_VERSION=($(git --version | sed -E -e 's/^git version ([^. ]\.[^. ]\.[^. ]).*$/\1/' -e 's/\./ /g'))
+
+# functions
+function in_array {  # in_array needle haystack[@]
+    local e
+    for e in "${@:2}"; do
+        [[ "${e}" == "${1}" ]] && return 0;
+    done
+    return 1
+}
+
+# args
+DOCS=""
+FETCH=false
+OPTIND=1
+OPTSPEC=":-:"
+OPTARRAY=('--docs' '--fetch')  # all short and long options
+while getopts "${OPTSPEC}" OPT; do
+    case "${OPT}" in
+        -)
+            case "${OPTARG}" in
+                docs)
+                    if [[ -z ${!OPTIND+dummy} ]] || in_array "${!OPTIND}" "${OPTARRAY[@]}"; then
+                        # Option without required argument
+                        echo "option --${OPTARG} requires a value" >&2
+                        exit 1
+                    fi
+                    DOCS="${!OPTIND}"
+                    OPTIND=$((OPTIND + 1))
+                    ;;
+                docs=*)
+                    DOCS="${OPTARG#*=}"
+                    ;;
+                fetch)
+                    FETCH=true
+                    ;;
+                fetch=*)
+                    # Option with prohibited value
+                    echo "option --${OPTARG%%=*} takes no value" >&2
+                    exit 1
+                    ;;
+                *)
+                    if [[ "${OPTERR}" == 1 ]]; then
+                        # Invalid option specified
+                        echo "invalid option: --${OPTARG}" >&2
+                        exit 1
+                    fi
+                    ;;
+            esac
+            ;;
+        :)
+            # Option without required value
+            echo "option -${OPTARG} requires a value" >&2
+            exit 1
+            ;;
+        \?)
+            # Invalid option specified
+            echo "invalid option: -${OPTARG}" >&2
+            exit 1
+            ;;
+    esac
+done
+shift $((OPTIND - 1))
+
+# fallback to official repo on fetch
+if [[ "${DOCS}" == "" ]] && [[ "${FETCH}" == true ]]; then
+    DOCS="${DOCS_OFFICIAL}"
+fi
+
+# docs source type
+DOCS_TYPE="local"
+if [[ "${DOCS}" == "" ]] && [[ "${FETCH}" == true ]]; then
+    DOCS="${DOCS_OFFICIAL}"
+    DOCS_TYPE="git-remote"
+elif [[ "${DOCS}" =~ ^(git|https?|ssh): ]] || [[ "${DOCS}" =~ ^.+@.+: ]]; then
+    DOCS_TYPE="git-remote"
+elif [[ "${DOCS}" =~ ^file: ]] || [[ "${DOCS}" =~ .git$ ]]; then
+    DOCS_TYPE="git-local"
+fi
+
+# nuke public directory
+$(GLOBIGNORE='*.gitkeep'; rm -rf "${PUBLIC_DIR}"/*)
+
+# get docs
+if [[ "${DOCS_TYPE}" == git* ]]; then
+    # repo uri
+    if [[ "${DOCS_TYPE}" == "git-local" ]] || [[ "${FETCH}" == true ]]; then
+        # fetch
+        echo "Cloning repository: ${DOCS}"
+        DOCS_TEMP=$(mktemp -d /tmp/HandBrake-docs.XXXXXX)
+        trap "rm -rf ${DOCS_TEMP}" EXIT INT TERM
+        GIT_CLONE=(git clone --depth 1 --recursive)
+        if [[ "${GIT_VERSION[0]}" -gt 3 ]] || ([[ "${GIT_VERSION[0]}" -eq 2 ]] && [[ "${GIT_VERSION[1]}" -ge 9 ]]); then
+            GIT_CLONE=(git clone --depth 1 --recursive --shallow-submodules)
+        fi
+        if "${GIT_CLONE[@]}" "${DOCS}" "${DOCS_TEMP}" >/dev/null 2>&1; then
+            # build
+            echo "Building documentation:"
+            echo "  tools"
+            if ! "${DOCS_TEMP}/build-tools" >/dev/null 2>&1; then
+                echo "Unable to build tools." >&2
+                exit 1
+            fi
+            echo "  docs"
+            sed -E -e 's/^([ ]*Embeddable:[ ]*).*/\1true/' "${DOCS_TEMP}/config-example.yaml" > "${DOCS_TEMP}/config.yaml"
+            if ! "${DOCS_TEMP}/build-docs" >/dev/null 2>&1; then
+                echo "Unable to build docs." >&2
+                exit 1
+            fi
+            rm -rf "${PUBLIC_DIR}/docs/"
+            cp -R "${DOCS_TEMP}/docs" "${PUBLIC_DIR}/docs"
+        else
+            # unable to clone repository
+            echo "Unable to clone repository: ${DOCS}" >&2
+            exit 1
+        fi
+        rm -rf "${DOCS_TEMP}"
+        trap - EXIT INT TERM
+    else
+        # fetch not explicitly allowed
+        echo "Remote repository specified without --fetch" >&2
+        exit 1
+    fi
+elif [[ "${DOCS}" != "" ]]; then
+    # directory path
+    if [[ -d "${DOCS}" ]] && [[ -r "${DOCS}" ]]; then
+        # valid path, copy directly
+        echo "Copying documentation from path: ${DOCS}"
+        rm -rf "${PUBLIC_DIR}/docs/"
+        cp -R "${DOCS}" "${PUBLIC_DIR}/docs"
+    else
+        # invalid path
+        echo "Invalid path or permissions: ${DOCS}" >&2
+        exit 1
+    fi
+fi
+
+if [[ -d "${PUBLIC_DIR}/docs" ]]; then
+    # process docs
+    :
+else
+    echo "public/docs does not exist or is not a directory; --fetch and/or set source with --docs path/uri" >&2
+    # continue without docs
+fi
+
+# process site
+:
+
+# done
+exit 0
