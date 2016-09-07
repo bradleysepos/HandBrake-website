@@ -1,0 +1,3 @@
+# Ignore generated site but keep the public directory
+public/*
+!public/.gitkeep
