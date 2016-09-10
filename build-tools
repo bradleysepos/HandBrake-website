@@ -1,0 +1,89 @@
+#!/bin/bash
+
+# vars
+SELF="${BASH_SOURCE[0]}"
+SELF_DIR=$(cd $(dirname "${BASH_SOURCE[0]}") && pwd -P)
+SELF_DIR="${SELF_DIR:-$(pwd)}"
+TOOLS_DIR="${SELF_DIR}/tools"
+BUILD_DIR="${TOOLS_DIR}/local/build"
+INSTALL_DIR="${TOOLS_DIR}/local"
+SYS_NAME=$(uname | awk '{ print tolower($0)}')
+TOOLS=('discount')
+TOOLS_EXTRA=()
+
+# args
+OPTIND=1
+OPTSPEC=":-:"
+OPTARRAY=('--all')  # all short and long options
+while getopts "${OPTSPEC}" OPT; do
+    case "${OPT}" in
+        -)
+            case "${OPTARG}" in
+                all)
+                    TOOLS=("${TOOLS[@]}" "${TOOLS_EXTRA[@]}")
+                    ;;
+                all=*)
+                    # Option with prohibited value
+                    echo "option --${OPTARG%%=*} takes no value" >&2
+                    exit 1
+                    ;;
+                *)
+                    if [[ "${OPTERR}" == 1 ]]; then
+                        # Invalid option specified
+                        echo "invalid option: --${OPTARG}" >&2
+                        exit 1
+                    fi
+                    ;;
+            esac
+            ;;
+        :)
+            # Option without required value
+            echo "option -${OPTARG} requires a value" >&2
+            exit 1
+            ;;
+        \?)
+            # Invalid option specified
+            echo "invalid option: -${OPTARG}" >&2
+            exit 1
+            ;;
+    esac
+done
+shift $((OPTIND - 1))
+
+# discount
+function build_discount {
+    ./configure.sh --prefix="${INSTALL_DIR}" || return 1
+    make || return 1
+    make install || return 1
+}
+
+# main
+rm -rf "${INSTALL_DIR}"
+rm -rf "${BUILD_DIR}"
+mkdir -p "${BUILD_DIR}"
+cd "${BUILD_DIR}"
+ERROR=false
+echo "Building:"
+for TOOL in "${TOOLS[@]}"; do
+    echo "  ${TOOL}"
+    cp -R "${TOOLS_DIR}/${TOOL}" "${BUILD_DIR}/"
+    rm -rf "${BUILD_DIR}/${TOOL}/.git"
+    cd "${BUILD_DIR}/${TOOL}"
+    if ! build_${TOOL} >/dev/null 2>&1; then
+        ERROR=true
+        echo "Unable to build tool: ${TOOL}" >&2
+        break
+    fi
+done
+
+# clean up
+if [[ "${ERROR}" != true ]]; then
+    rm -rf "${BUILD_DIR}"
+fi
+
+# done
+if [[ "${ERROR}" == true ]]; then
+    exit 1
+fi
+echo "Complete."
+exit 0
