@@ -78,11 +78,13 @@ function build_source {
         YAML=true
     fi
     if [[ "${YAML}" == true ]]; then
+        echo "---" > "${DEST}.yaml"
         # split yaml and markdown
-        awk '{ drop = 0; } /^---$/ { if (NR==1) { drop = 1 } else if (NR>1) { exit } else { drop = 0; next } } drop == 0 { print }' "${SOURCE}" > "${DEST}.yaml"
+        awk '{ drop = 0; } /^---$/ { if (NR==1) { drop = 1 } else if (NR>1) { exit } else { drop = 0; next } } drop == 0 { print }' "${SOURCE}" >> "${DEST}.yaml"
         mv "${SOURCE}" "${DEST}.markdown.temp"
         tail -n +$(wc -l "${DEST}.yaml" | awk '{ print $1+3 }') "${DEST}.markdown.temp" > "${SOURCE}"
         rm -f "${DEST}.markdown.temp"
+        echo "..." >> "${DEST}.yaml"
         # parse yaml
         eval $(parse_yaml "${DEST}.yaml" "DOCUMENT_")
     fi
@@ -118,12 +120,32 @@ function build_source {
     -i.sedbak "${DEST}.html"
 
     # clean up
-    rm -f "${DEST}.yaml"
-    rm -f "${DEST}.markdown"
     rm -f "${DEST}.markdown.sedbak"
     rm -f "${DEST}.nav.partial.html"
     rm -f "${DEST}.html.temp"
     rm -f "${DEST}.html.sedbak"
+}
+
+# builds chronological index of sources
+function build_index_chronological {  # build_index_chronological FILES[@]
+    if [[ "${#@}" -gt 0 ]]; then
+        local FILES DOCUMENT TITLE DATE DATE_PRETTY
+        FILES=($(for F in ${@}; do echo "${F}"; done | sort -nr -t/))
+        echo '<ol class="archive">'
+        for FILE in ${FILES[@]}; do
+            DOCUMENT=$(echo "yaml_${FILE}" | sed -E -e 's/[^A-Za-z0-9]/_/g')
+            eval $(parse_yaml "${FILE}" "${DOCUMENT}_")
+            URL="${FILE%.yaml}.html"
+            TITLE="${DOCUMENT}_Title"
+            TITLE="${!TITLE}"
+            DATE="${DOCUMENT}_Date"
+            DATE="${!DATE}"
+            #DATE_PRETTY=$(date -ju -f "%Y-%m-%d-%H%M%S" "${DATE}-000000" "+%A, %B %d, %Y")
+            echo -e '<li><span class="date">'${DATE}'</span><span class="separator">: </span><a class="title" href="'${URL}'">'${TITLE}'</a></li>'
+            for VAR in $(set | grep "^${DOCUMENT}_=" | cut -d '=' -f 1); do unset "${VAR}"; done
+        done
+        echo '</ol>'
+    fi
 }
 
 # args
@@ -295,8 +317,13 @@ else
         done
     fi
 
+    # news archive
+    cd "${PUBLIC_DIR}/news"
+    NEWS=($(find . | sed 's/^\.\///' | grep -i '.yaml$'))
+    build_index_chronological "${NEWS[@]}" > index.html
+
     # clean up
-    find "${PUBLIC_DIR}" -name '*.partial.html' -exec rm -f {} \;
+    find "${PUBLIC_DIR}" \( -name '*.partial.html' -o -name '*.yaml' -o -name '*.markdown' \) -delete
 fi
 
 # done
