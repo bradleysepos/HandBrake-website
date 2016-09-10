@@ -4,17 +4,126 @@
 SELF="${BASH_SOURCE[0]}"
 SELF_DIR=$(cd $(dirname "${BASH_SOURCE[0]}") && pwd -P)
 SELF_DIR="${SELF_DIR:-$(pwd)}"
+SOURCE_DIR="${SELF_DIR}/source"
 PUBLIC_DIR="${SELF_DIR}/public"
+TOOLS_BIN="${SELF_DIR}/tools/local/bin"
 DOCS_OFFICIAL="https://github.com/HandBrake/HandBrake-docs.git"
 GIT_VERSION=($(git --version | sed -E -e 's/^git version ([^. ]\.[^. ]\.[^. ]).*$/\1/' -e 's/\./ /g'))
 
-# functions
+# dependencies
+MARKDOWN="${TOOLS_BIN}/markdown"
+DEPS=("${MARKDOWN}")
+
+# creates bash variables from yaml records
+# https://gist.github.com/pkuczynski/8665367
+function parse_yaml {
+   local prefix=$2
+   local s='[[:space:]]*' w='[a-zA-Z0-9_]*' fs=$(echo @|tr @ '\034')
+   sed -ne "s|^\($s\)\($w\)$s:$s\"\(.*\)\"$s\$|\1$fs\2$fs\3|p" \
+        -e "s|^\($s\)\($w\)$s:$s\(.*\)$s\$|\1$fs\2$fs\3|p"  $1 |
+   awk -F$fs '{
+      indent = length($1)/2;
+      vname[indent] = $2;
+      for (i in vname) {if (i > indent) {delete vname[i]}}
+      if (length($3) > 0) {
+         vn=""; for (i=0; i<indent; i++) {vn=(vn)(vname[i])("_")}
+         printf("%s%s%s=\"%s\"\n", "'$prefix'",vn, $2, $3);
+      }
+   }'
+}
+
+# checks for required external tools
+function check_dependencies {  # check_dependencies $DEP1 $DEP2 ...
+    local DEPS ERRORS
+    DEPS=("${@}");
+    ERRORS=()
+    for DEP in ${DEPS[@]}; do
+        if echo "${DEP}" | grep '/' >/dev/null 2>&1 && [[ ! -x "${DEP}" ]]; then
+            ERRORS+=("${DEP}")
+        elif ! hash "${DEP}" >/dev/null 2>&1; then
+            ERRORS+=("${DEP}")
+        fi
+    done
+    if [[ "${#ERRORS[@]}" -ne 0 ]]; then
+        echo "dependencies: ${DEPS[@]}"
+        echo "unable to find command(s): ${ERRORS[*]}" >&2
+        return 1
+    fi
+}
+
+# tests whether a string is an exact match for an array item
 function in_array {  # in_array needle haystack[@]
     local e
     for e in "${@:2}"; do
         [[ "${e}" == "${1}" ]] && return 0;
     done
     return 1
+}
+
+# builds document(s) from a single source file
+function build_source {
+    local SOURCE BASE_RELPATH DEST DEST_NAME YAML DOCUMENT_Type DOCUMENT_State DOCUMENT_Title DOCUMENT_Project DOCUMENT_Project_URL DOCUMENT_Project_Version DOCUMENT_Language DOCUMENT_Language_Code DOCUMENT_Text_Encoding DOCUMENT_Authors DOCUMENT_Copyright DOCUMENT_License DOCUMENT_License_Abbr DOCUMENT_License_URL DOCUMENT_Redirect_URL DOCUMENT_Content NAVIGATION_PARTIAL NAVIGATION_RELPATH TEMPLATE_Scripts TEMPLATE_Styles
+    SOURCE="${1}"
+    BASE_RELPATH="${SOURCE#$DOCS_DIR/}"       # strip abs prefix
+    BASE_RELPATH="${BASE_RELPATH//[^\/]}"     # leave only slashes
+    BASE_RELPATH="${BASE_RELPATH//[\/]/../}"  # slashes to dirs
+    BASE_RELPATH="${BASE_RELPATH:-./}"        # empty to current dir
+    DEST="${SOURCE%.markdown}"
+    DEST_NAME="${DEST##*/}"
+    DOCUMENT_Content="${DEST}.html.temp"
+
+    # check for yaml header
+    YAML=false
+    if head -n 1 "${SOURCE}" | grep '^---$' >/dev/null 2>&1; then
+        YAML=true
+    fi
+    if [[ "${YAML}" == true ]]; then
+        # split yaml and markdown
+        awk '{ drop = 0; } /^---$/ { if (NR==1) { drop = 1 } else if (NR>1) { exit } else { drop = 0; next } } drop == 0 { print }' "${SOURCE}" > "${DEST}.yaml"
+        mv "${SOURCE}" "${DEST}.markdown.temp"
+        tail -n +$(wc -l "${DEST}.yaml" | awk '{ print $1+3 }') "${DEST}.markdown.temp" > "${SOURCE}"
+        rm -f "${DEST}.markdown.temp"
+        # parse yaml
+        eval $(parse_yaml "${DEST}.yaml" "DOCUMENT_")
+    fi
+
+    # process authors
+    DOCUMENT_Authors=$(echo "${DOCUMENT_Authors}" | sed -e 's/,[^ ]/, /g' -e 's/[ ]*<[^,]*>//g' -e 's/\(.*\), /\1, and /' -e 's/\([^,]\) /\1\\\&nbsp;/g')
+    DELIM_NUM=$(grep -o ',' <<< "${DOCUMENT_Authors}" | wc -l)
+    if [[ "${DELIM_NUM}" -eq 1 ]]; then
+        DOCUMENT_Authors=$(echo "${DOCUMENT_Authors}" | sed -e  's/,//')
+    fi
+
+    # process state
+    DOCUMENT_State=(${DOCUMENT_State//,/})
+
+    # preprocess markdown to add implicit figures
+    sed -E \
+    -e 's|^!\[(.+)]\([ ]*([^ ]+)[ ]*"(.+)"[ ]*\)$|<figure><a href="\2"><img src="\2" alt="\1" /></a><figcaption>\3</figcaption></figure>|' \
+    -i.sedbak "${SOURCE}"
+    # convert preprocessed markdown document to html
+    "${MARKDOWN}" -fdlextra -ffencedcode -ffootnote -fgithubtags "${SOURCE}" > "${DOCUMENT_Content}"
+
+    awk '/\{\% if/ {k=1;i=1;delete a} {a[i++]=$0} (k==1 && /endif \%\}/) {k=0;next} (k==0) { print }' "${DEST}.html.temp" > "${DEST}.html"
+    # process comment tags
+    sed -E \
+    -e 's|<!--[ ]*\.([^ ]*)[ ]*-->|<div class="\1">|g' \
+    -e 's|<!--[ ]*\#([^ ]*)[ ]*-->|<div id="\1">|g' \
+    -e 's|<!--[ ]*\/([.#])([^ ]*)[ ]*-->|</div><!-- /\1\2 -->|g' \
+    -i.sedbak "${DEST}.html"
+    # postprocess
+    sed -E \
+    -e 's|<p><figure>|<figure>|' \
+    -e 's|</figure></p>|</figure>|' \
+    -i.sedbak "${DEST}.html"
+
+    # clean up
+    rm -f "${DEST}.yaml"
+    rm -f "${DEST}.markdown"
+    rm -f "${DEST}.markdown.sedbak"
+    rm -f "${DEST}.nav.partial.html"
+    rm -f "${DEST}.html.temp"
+    rm -f "${DEST}.html.sedbak"
 }
 
 # args
@@ -69,6 +178,16 @@ while getopts "${OPTSPEC}" OPT; do
     esac
 done
 shift $((OPTIND - 1))
+if [[ "${1:-}" != "" ]]; then
+    if [[ "${DOCS}" != "" ]]; then
+        echo "option --docs not valid when building single document: ${1}" >&2
+        exit 1
+    fi
+    if [[ "${FETCH}" != false ]]; then
+        echo "option --fetch not valid when building single document: ${1}" >&2
+        exit 1
+    fi
+fi
 
 # fallback to official repo on fetch
 if [[ "${DOCS}" == "" ]] && [[ "${FETCH}" == true ]]; then
@@ -86,7 +205,14 @@ elif [[ "${DOCS}" =~ ^file: ]] || [[ "${DOCS}" =~ .git$ ]]; then
     DOCS_TYPE="git-local"
 fi
 
+# base directory (absolute)
+cd "${SELF_DIR}"
+
+# check deps
+check_dependencies "${DEPS[@]}" || exit 1
+
 # nuke public directory
+mkdir -p "${PUBLIC_DIR}"
 $(GLOBIGNORE='*.gitkeep'; rm -rf "${PUBLIC_DIR}"/*)
 
 # get docs
@@ -143,16 +269,35 @@ elif [[ "${DOCS}" != "" ]]; then
     fi
 fi
 
-if [[ -d "${PUBLIC_DIR}/docs" ]]; then
-    # process docs
-    :
+# build
+if [[ "${1:-}" != "" ]]; then
+    # single source
+    build_source "${1}"
 else
-    echo "public/docs does not exist or is not a directory; --fetch and/or set source with --docs path/uri" >&2
-    # continue without docs
-fi
+    # everything
+    if [[ -d "${PUBLIC_DIR}/docs" ]]; then
+        # process docs
+        :
+    else
+        echo "public/docs does not exist or is not a directory; --fetch and/or set source with --docs path/uri" >&2
+        # continue without docs
+    fi
 
-# process site
-:
+    # sources
+    cp -R "${SOURCE_DIR}/news" "${PUBLIC_DIR}/"
+    SOURCES=($(find "${PUBLIC_DIR}" | sed 's/^\.\///' | grep -i '.markdown'))
+    if [[ "${PARALLEL:-}" != "" ]]; then
+        export -f build_source
+        "${PARALLEL}" "${SELF}" ::: "${SOURCES[@]}"
+    else
+        for SOURCE in ${SOURCES[@]}; do
+            build_source "${SOURCE}"
+        done
+    fi
+
+    # clean up
+    find "${PUBLIC_DIR}" -name '*.partial.html' -exec rm -f {} \;
+fi
 
 # done
 exit 0
