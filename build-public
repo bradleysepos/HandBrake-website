@@ -129,9 +129,9 @@ function build_source {
 # builds chronological index of sources
 function build_index_chronological {  # build_index_chronological FILES[@]
     if [[ "${#@}" -gt 0 ]]; then
-        local FILES DOCUMENT TITLE DATE DATE_PRETTY
+        local COUNT FILES DOCUMENT TITLE DATE DATE_PRETTY
+        COUNT=0
         FILES=($(for F in ${@}; do echo "${F}"; done | sort -nr -t/))
-        echo '<ol class="archive">'
         for FILE in ${FILES[@]}; do
             DOCUMENT=$(echo "yaml_${FILE}" | sed -E -e 's/[^A-Za-z0-9]/_/g')
             eval $(parse_yaml "${FILE}" "${DOCUMENT}_")
@@ -141,10 +141,20 @@ function build_index_chronological {  # build_index_chronological FILES[@]
             DATE="${DOCUMENT}_Date"
             DATE="${!DATE}"
             #DATE_PRETTY=$(date -ju -f "%Y-%m-%d-%H%M%S" "${DATE}-000000" "+%A, %B %d, %Y")
-            echo -e '<li><span class="date">'${DATE}'</span><span class="separator">: </span><a class="title" href="'${URL}'">'${TITLE}'</a></li>'
+            STATE="${DOCUMENT_State}"
+            STATE=($(echo "${!STATE}" | sed 's/,//g'))
+            if ! in_array 'draft' "${STATE[@]}"; then
+                COUNT=$((COUNT + 1))
+                if [[ "${COUNT}" -eq 1 ]]; then
+                    echo '<ol class="archive">'
+                fi
+                echo -e '<li><span class="date">'${DATE}'</span><span class="separator">: </span><a class="title" href="'${URL}'">'${TITLE}'</a></li>'
+            fi
             for VAR in $(set | grep "^${DOCUMENT}_=" | cut -d '=' -f 1); do unset "${VAR}"; done
         done
-        echo '</ol>'
+        if [[ "${COUNT}" -gt 0 ]]; then
+            echo '</ol>'
+        fi
     fi
 }
 
@@ -306,7 +316,11 @@ else
     fi
 
     # sources
-    cp -R "${SOURCE_DIR}/news" "${PUBLIC_DIR}/"
+    if [[ -e "${SOURCE_DIR}/news" ]]; then
+        cp -R "${SOURCE_DIR}/news" "${PUBLIC_DIR}/"
+    else
+        mkdir -p "${PUBLIC_DIR}/news"
+    fi
     SOURCES=($(find "${PUBLIC_DIR}" | sed 's/^\.\///' | grep -i '.markdown'))
     if [[ "${PARALLEL:-}" != "" ]]; then
         export -f build_source
