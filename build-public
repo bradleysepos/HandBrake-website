@@ -274,7 +274,7 @@ if [[ "${DOCS_TYPE}" == git* ]]; then
                 exit 1
             fi
             rm -rf "${PUBLIC_DIR}/docs/"
-            cp -R "${DOCS_TEMP}/docs" "${PUBLIC_DIR}/docs"
+            cp -R "${DOCS_TEMP}/public/docs" "${PUBLIC_DIR}/docs"
         else
             # unable to clone repository
             echo "Unable to clone repository: ${DOCS}" >&2
