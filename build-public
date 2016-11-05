@@ -8,7 +8,7 @@ SOURCE_DIR="${SELF_DIR}/source"
 PUBLIC_DIR="${SELF_DIR}/public"
 TOOLS_BIN="${SELF_DIR}/tools/local/bin"
 DOCS_OFFICIAL="https://github.com/HandBrake/HandBrake-docs.git"
-GIT_VERSION=($(git --version | sed -E -e 's/^git version ([^. ]\.[^. ]\.[^. ]).*$/\1/' -e 's/\./ /g'))
+GIT_VERSION=($(git --version | sed -E -e 's/^git +version +([^. ]+\.[^. ]+\.[^. ]+).*$/\1/' -e 's/\./ /g'))
 
 # dependencies
 MARKDOWN="${TOOLS_BIN}/markdown"
@@ -62,7 +62,7 @@ function in_array {  # in_array needle haystack[@]
 
 # builds document(s) from a single source file
 function build_source {
-    local SOURCE BASE_RELPATH DEST DEST_NAME YAML DOCUMENT_Type DOCUMENT_State DOCUMENT_Title DOCUMENT_Project DOCUMENT_Project_URL DOCUMENT_Project_Version DOCUMENT_Language DOCUMENT_Language_Code DOCUMENT_Text_Encoding DOCUMENT_Authors DOCUMENT_Copyright DOCUMENT_License DOCUMENT_License_Abbr DOCUMENT_License_URL DOCUMENT_Redirect_URL DOCUMENT_Content NAVIGATION_PARTIAL NAVIGATION_RELPATH TEMPLATE_Scripts TEMPLATE_Styles
+    local SOURCE BASE_RELPATH DEST DEST_NAME YAML DOCUMENT_Type DOCUMENT_State DOCUMENT_Title DOCUMENT_Project DOCUMENT_Project_URL DOCUMENT_Project_Version DOCUMENT_Language DOCUMENT_Language_Code DOCUMENT_Authors DOCUMENT_Copyright DOCUMENT_License DOCUMENT_License_Abbr DOCUMENT_License_URL DOCUMENT_Redirect_URL DOCUMENT_Content NAVIGATION_PARTIAL NAVIGATION_RELPATH TEMPLATE_Scripts TEMPLATE_Styles
     SOURCE="${1}"
     BASE_RELPATH="${SOURCE#$PUBLIC_DIR/}"       # strip abs prefix
     BASE_RELPATH="${BASE_RELPATH//[^\/]}"     # leave only slashes
@@ -256,9 +256,6 @@ if [[ "${DOCS_TYPE}" == git* ]]; then
         DOCS_TEMP=$(mktemp -d /tmp/HandBrake-docs.XXXXXX)
         trap "rm -rf ${DOCS_TEMP}" EXIT INT TERM
         GIT_CLONE=(git clone --depth 1 --recursive)
-        if [[ "${GIT_VERSION[0]}" -gt 3 ]] || ([[ "${GIT_VERSION[0]}" -eq 2 ]] && [[ "${GIT_VERSION[1]}" -ge 9 ]]); then
-            GIT_CLONE=(git clone --depth 1 --recursive --shallow-submodules)
-        fi
         if "${GIT_CLONE[@]}" "${DOCS}" "${DOCS_TEMP}" >/dev/null 2>&1; then
             # build
             echo "Building documentation:"
